@@ -68,7 +68,7 @@ def convert_url_to_local_path(url: Optional[str]) -> Optional[str]:
     if not isinstance(url, str):
         return None
     
-    base_path = url.replace("https://www.aozora.gr.jp/cards/", "aozorabunko_text-master/cards/")
+    base_path = url.replace("https://www.aozora.gr.jp/cards/", "aozorabunko_text/cards/")
     base_path = base_path.replace(".zip", "")
     filename = os.path.basename(base_path) + ".txt"
     return os.path.join(base_path, filename)
@@ -104,11 +104,6 @@ def process_aozora_data(csv_file: str, output_parquet_file: str):
     
     # 不要なカラムを削除
     columns_to_exclude = [
-        "XHTML/HTMLファイルURL", 
-        "XHTML/HTMLファイル最終更新日",
-        "XHTML/HTMLファイル符号化方式",
-        "XHTML/HTMLファイル文字集合",
-        "XHTML/HTMLファイル修正回数",
         "ローカルパス"
     ]
     df = df.drop(columns=[col for col in columns_to_exclude if col in df.columns])
