@@ -1,0 +1,19 @@
+body {
+  font-family: Arial, sans-serif;
+  margin: 20px;
+}
+
+#editor-container {
+  border: 1px solid #ccc;
+  padding: 10px;
+  height: 150px;
+  overflow: auto;
+}
+
+pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  background: #f8f8f8;
+  padding: 10px;
+  border: 1px solid #ccc;
+}
