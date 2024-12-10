@@ -69,6 +69,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
           const runButton = document.createElement('button')
           runButton.textContent = 'クエリ実行'
+          runButton.id = 'run'
           runButton.style.cssText = `
             padding: 5px 10px;
             background: #4CAF50;
@@ -124,6 +125,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   for (const button of [analyzeButton, authorStatsButton, yearlyStatsButton, clearButton, searchInput]) {
     if (button) button.disabled = true
   }
+
+  // Editor.domも無効化
+  editor.dom.style.pointerEvents = 'none'
 
   // Set up search functionality
   if (searchInput) {
@@ -214,6 +218,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     for (const button of [analyzeButton, authorStatsButton, yearlyStatsButton, clearButton, searchInput]) {
       if (button) button.disabled = false
     }
+
+    // Editor.domを有効化
+    editor.dom.style.pointerEvents = 'auto'
+
   } catch (error) {
     console.error('Failed to load Parquet files:', error)
     displayError(error)
