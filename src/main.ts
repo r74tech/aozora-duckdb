@@ -371,69 +371,104 @@ const deleteBufferFromOPFS = async (partIndex: number): Promise<void> => {
 }
 
 // Modified loadParquetParts function to use OPFS
-async function loadParquetParts(db: duckdb.AsyncDuckDB): Promise<void> {
-  const baseUrl = import.meta.env.BASE_URL || '/'
-  const totalParts = 6
+async function loadParquetParts(db) {
+  const baseUrl = import.meta.env.BASE_URL || '/';
+  const totalParts = 6;
 
   try {
-    const conn = await db.connect()
+    const conn = await db.connect();
 
     for (let i = 0; i < totalParts; i++) {
-      let buffer = await getBufferFromOPFS(i)
+      let buffer = await getBufferFromOPFS(i);
 
       // If not in OPFS, fetch and save
       if (!buffer) {
         const partUrl = new URL(
           `${FILE_NAME_PREFIX}${i.toString().padStart(2, '0')}.parquet`,
           window.location.origin + baseUrl
-        ).href
+        ).href;
 
-        console.debug(`Fetching part ${i} from:`, partUrl)
-        const response = await fetch(partUrl)
+        console.debug(`Fetching part ${i} from:`, partUrl);
+        const response = await fetch(partUrl);
         if (!response.ok) {
-          throw new Error(`Failed to fetch part ${i}: ${response.statusText}`)
+          throw new Error(`Failed to fetch part ${i}: ${response.statusText}`);
         }
 
-        if (!response.body) {
-          throw new Error('Response body is null')
-        }
+        const contentLength = parseInt(response.headers.get('Content-Length') || '0');
+        const reader = response.body.getReader();
+        let receivedLength = 0;
+
+        const stream = new ReadableStream({
+          async start(controller) {
+            while (true) {
+              const { done, value } = await reader.read();
+
+              if (done) break;
+
+              receivedLength += value.length;
+              const partProgress = (receivedLength / contentLength) * 100;
+              const totalProgress = ((i * 100 + partProgress) / totalParts);
+
+              updateProgress(i, partProgress, totalProgress);
+
+              controller.enqueue(value);
+            }
+            controller.close();
+          }
+        });
 
         // Save to OPFS
-        await saveStreamToOPFS(response.body, i)
+        await saveStreamToOPFS(stream, i);
 
         // Get the saved buffer
-        buffer = await getBufferFromOPFS(i)
+        buffer = await getBufferFromOPFS(i);
         if (!buffer) {
-          throw new Error(`Failed to retrieve buffer from OPFS for part ${i}`)
+          throw new Error(`Failed to retrieve buffer from OPFS for part ${i}`);
         }
+      } else {
+        // If already in OPFS, update progress immediately
+        updateProgress(i, 100, ((i + 1) * 100 / totalParts));
       }
 
-      console.debug(`Processing part ${i}:`, buffer.byteLength)
-      await db.registerFileBuffer(`part${i}.parquet`, new Uint8Array(buffer))
+      console.debug(`Processing part ${i}:`, buffer.byteLength);
+      await db.registerFileBuffer(`part${i}.parquet`, new Uint8Array(buffer));
 
       if (i === 0) {
         await conn.query(`
           CREATE TABLE aozora_combined AS 
           SELECT * FROM read_parquet('part0.parquet');
-        `)
+        `);
       } else {
         await conn.query(`
           INSERT INTO aozora_combined 
           SELECT * FROM read_parquet('part${i}.parquet');
-        `)
+        `);
       }
+    }
+
+    // Update status when complete
+    const progressStatus = document.querySelector('.progress-status');
+    if (progressStatus) {
+      progressStatus.textContent = 'ダウンロード完了';
     }
 
     const result = await conn.query(`
       SELECT COUNT(*) as total_rows 
       FROM aozora_combined;
-    `)
-    console.debug('Total rows loaded:', result.toArray()[0].total_rows)
+    `);
+    console.debug('Total rows loaded:', result.toArray()[0].total_rows);
 
-    await conn.close()
+    await conn.close();
   } catch (error) {
-    console.error('Error loading Parquet files:', error)
-    throw error
+    // Update status on error
+    const progressStatus = document.querySelector('.progress-status');
+    if (progressStatus) {
+      progressStatus.textContent = `エラーが発生しました: ${error.message}`;
+      progressStatus.style.backgroundColor = '#fee2e2';
+      progressStatus.style.color = '#991b1b';
+    }
+    console.error('Error loading Parquet files:', error);
+    throw error;
   }
 }
 
@@ -449,3 +484,34 @@ async function clearAllPartsFromOPFS(): Promise<void> {
     }
   }
 }
+
+
+function updateProgress(currentPart, partProgress, totalProgress) {
+  const progressBar = document.querySelector('.progress-bar');
+  const progressSize = document.querySelector('.progress-size');
+  const progressPart = document.querySelector('.progress-part');
+  const progressPercentage = document.querySelector('.progress-percentage');
+  const progressStatus = document.querySelector('.progress-status');
+
+  if (progressBar) {
+    progressBar.style.width = `${totalProgress}%`;
+  }
+
+  if (progressSize) {
+    const downloadedMB = Math.round(totalProgress * 300 / 100);
+    progressSize.textContent = `${downloadedMB}MB / 300MB`;
+  }
+
+  if (progressPart) {
+    progressPart.textContent = `パート ${currentPart + 1}/6`;
+  }
+
+  if (progressPercentage) {
+    progressPercentage.textContent = `${totalProgress.toFixed(1)}%`;
+  }
+
+  if (progressStatus) {
+    progressStatus.textContent = `ダウンロード中: パート ${currentPart + 1}`;
+  }
+}
+
