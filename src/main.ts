@@ -30,8 +30,12 @@ import { EditorView, basicSetup } from 'codemirror'
 let editor: EditorView
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const PARQUET_FILE_URL = import.meta.env.VITE_PARQUET_FILE_URL
-  console.debug('Parquet file URL:', PARQUET_FILE_URL)
+  const opfsSupported = 'createWritable' in FileSystemFileHandle.prototype
+  const opfsStatusElement = document.getElementById('opfs-status')
+  if (opfsStatusElement) {
+    opfsStatusElement.textContent = `OPFS: ${opfsSupported ? 'Supported' : 'Not supported'}`
+  }
+
   const analyzeButton = document.getElementById('analyze') as HTMLButtonElement | null
   const authorStatsButton = document.getElementById('author-stats') as HTMLButtonElement | null
   const yearlyStatsButton = document.getElementById('yearly-stats') as HTMLButtonElement | null
@@ -205,9 +209,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   })
 
   // クリアボタンの設定
-  document.getElementById('clear')?.addEventListener('click', () => {
+  document.getElementById('clear')?.addEventListener('click', async () => {
     const resultElement = document.getElementById('result')
-    if (resultElement) resultElement.innerHTML = ''
+    if (resultElement) {
+      resultElement.innerHTML = ''
+    }
+  })
+
+  // OPFSのデータを削除
+  document.getElementById('clear-opfs')?.addEventListener('click', async () => {
+    try {
+      await clearAllPartsFromOPFS()
+    } catch (error) {
+      console.error('Error clearing OPFS:', error)
+    }
   })
 
   // Load Parquet file
@@ -298,34 +313,104 @@ function displayError(error: any) {
   `
 }
 
+// OPFS related functions
+const FILE_NAME_PREFIX = 'aozora_combined_part'
+
+// Function to get buffer from OPFS
+const getBufferFromOPFS = async (partIndex: number): Promise<ArrayBuffer | null> => {
+  if ('createWritable' in FileSystemFileHandle.prototype) {
+    try {
+      const root = await navigator.storage.getDirectory()
+      const fileName = `${FILE_NAME_PREFIX}${partIndex.toString().padStart(2, '0')}.parquet`
+      const fileHandle = await root.getFileHandle(fileName, { create: false })
+      if (fileHandle) {
+        const file = await fileHandle.getFile()
+        return await file.arrayBuffer()
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'NotFoundError') {
+        return null
+      }
+      console.error('Error reading file from OPFS:', error)
+    }
+  } else {
+    console.warn('createWritable is not supported. Data will not be saved to OPFS.')
+  }
+  return null
+}
+
+// Function to save stream to OPFS
+const saveStreamToOPFS = async (stream: ReadableStream, partIndex: number): Promise<void> => {
+  if ('createWritable' in FileSystemFileHandle.prototype) {
+    try {
+      const root = await navigator.storage.getDirectory()
+      const fileName = `${FILE_NAME_PREFIX}${partIndex.toString().padStart(2, '0')}.parquet`
+      const fileHandle = await root.getFileHandle(fileName, { create: true })
+      const writable = await fileHandle.createWritable()
+      await stream.pipeTo(writable)
+      console.debug(`Saved part ${partIndex} to OPFS`)
+    } catch (error) {
+      console.error('Error occurred while saving file to OPFS:', error)
+      throw error
+    }
+  } else {
+    console.warn('createWritable is not supported. Data will not be saved to OPFS.')
+  }
+}
+
+// Function to delete buffer from OPFS
+const deleteBufferFromOPFS = async (partIndex: number): Promise<void> => {
+  try {
+    const root = await navigator.storage.getDirectory()
+    const fileName = `${FILE_NAME_PREFIX}${partIndex.toString().padStart(2, '0')}.parquet`
+    await root.removeEntry(fileName)
+  } catch (error) {
+    console.error('Error deleting file from OPFS:', error)
+    throw error
+  }
+}
+
+// Modified loadParquetParts function to use OPFS
 async function loadParquetParts(db: duckdb.AsyncDuckDB): Promise<void> {
   const baseUrl = import.meta.env.BASE_URL || '/'
-  const totalParts = 6 // パーツの総数
+  const totalParts = 6
 
   try {
     const conn = await db.connect()
 
-    // 各パートを順番に読み込む
     for (let i = 0; i < totalParts; i++) {
-      const partUrl = new URL(
-        `aozora_combined_part${i.toString().padStart(2, '0')}.parquet`,
-        window.location.origin + baseUrl
-      ).href
+      let buffer = await getBufferFromOPFS(i)
 
-      console.debug(`Loading part ${i}:`, partUrl)
+      // If not in OPFS, fetch and save
+      if (!buffer) {
+        const partUrl = new URL(
+          `${FILE_NAME_PREFIX}${i.toString().padStart(2, '0')}.parquet`,
+          window.location.origin + baseUrl
+        ).href
 
-      const response = await fetch(partUrl)
-      if (!response.ok) {
-        throw new Error(`Failed to fetch part ${i}: ${response.statusText}`)
+        console.debug(`Fetching part ${i} from:`, partUrl)
+        const response = await fetch(partUrl)
+        if (!response.ok) {
+          throw new Error(`Failed to fetch part ${i}: ${response.statusText}`)
+        }
+
+        if (!response.body) {
+          throw new Error('Response body is null')
+        }
+
+        // Save to OPFS
+        await saveStreamToOPFS(response.body, i)
+
+        // Get the saved buffer
+        buffer = await getBufferFromOPFS(i)
+        if (!buffer) {
+          throw new Error(`Failed to retrieve buffer from OPFS for part ${i}`)
+        }
       }
 
-      const buffer = await response.arrayBuffer()
-      console.debug(`Loaded part ${i}:`, buffer.byteLength)
-
-      // 各パートをDuckDBに登録
+      console.debug(`Processing part ${i}:`, buffer.byteLength)
       await db.registerFileBuffer(`part${i}.parquet`, new Uint8Array(buffer))
 
-      // 最初のパートの場合はテーブルを作成、それ以外の場合は既存のテーブルにデータを追加
       if (i === 0) {
         await conn.query(`
           CREATE TABLE aozora_combined AS 
@@ -339,7 +424,6 @@ async function loadParquetParts(db: duckdb.AsyncDuckDB): Promise<void> {
       }
     }
 
-    // 検証クエリを実行
     const result = await conn.query(`
       SELECT COUNT(*) as total_rows 
       FROM aozora_combined;
@@ -347,9 +431,21 @@ async function loadParquetParts(db: duckdb.AsyncDuckDB): Promise<void> {
     console.debug('Total rows loaded:', result.toArray()[0].total_rows)
 
     await conn.close()
-    return
   } catch (error) {
     console.error('Error loading Parquet files:', error)
     throw error
+  }
+}
+
+// Clear function to remove all parts from OPFS
+async function clearAllPartsFromOPFS(): Promise<void> {
+  const totalParts = 6
+  for (let i = 0; i < totalParts; i++) {
+    try {
+      await deleteBufferFromOPFS(i)
+      console.debug(`Deleted part ${i} from OPFS`)
+    } catch (error) {
+      console.error(`Error deleting part ${i} from OPFS:`, error)
+    }
   }
 }
