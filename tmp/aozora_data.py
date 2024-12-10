@@ -78,6 +78,9 @@ def process_aozora_data(csv_file: str, output_parquet_file: str):
     print("Reading CSV file...")
     df = pd.read_csv(csv_file)
     
+    # カラム名から "XHTML/" を削除
+    df.columns = [col.replace('XHTML/', '') if 'XHTML/' in col else col for col in df.columns]
+    
     print("Converting URLs to local paths...")
     df["ローカルパス"] = df["テキストファイルURL"].apply(convert_url_to_local_path)
     
@@ -117,6 +120,11 @@ def process_aozora_data(csv_file: str, output_parquet_file: str):
     # ファイルサイズを確認
     file_size = os.path.getsize(output_parquet_file) / (1024 * 1024)  # MB単位
     print(f"Parquet file size: {file_size:.2f} MB")
+
+    # 変更後のカラム名を表示
+    print("\nFinal columns:")
+    for col in df.columns:
+        print(f"- {col}")
 
 if __name__ == "__main__":
     csv_file = "list_person_all_extended_utf8.csv"

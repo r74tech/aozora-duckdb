@@ -255,8 +255,7 @@ function displayResults(result: duckdb.AsyncQueryResult) {
 
           const cellContent = typeof cellValue === 'string'
             ? cellValue
-              // HTMLでの表示のために改行を<br>に変換
-              .replace(/\n/g, '<br>')
+              .replace(/\n/g, '\n')
               // HTMLエスケープ
               .replace(/&/g, '&amp;')
               .replace(/</g, '&lt;')
